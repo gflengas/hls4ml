@@ -5,7 +5,7 @@ import warnings
 from shutil import copy2
 
 from hls4ml.backends import VitisBackend, VivadoBackend
-from hls4ml.model.flow import register_flow
+from hls4ml.model.flow import get_flow, register_flow
 
 
 class VitisUnifiedBackend(VitisBackend):
@@ -131,6 +131,7 @@ class VitisUnifiedBackend(VitisBackend):
         in_stream_buf_size=128,
         out_stream_buf_size=128,
         axi_mode='axi_master',
+        sepconv_fusion_layers=None,
         **_,
     ):
         supported_boards_path = os.path.join(os.path.dirname(__file__), 'supported_boards.json')
@@ -155,6 +156,20 @@ class VitisUnifiedBackend(VitisBackend):
         config['VitisUnifiedConfig']['Driver'] = driver
         config['VitisUnifiedConfig']['InputDtype'] = input_type  # float, double or ap_fixed<a,b>
         config['VitisUnifiedConfig']['OutputDtype'] = output_type  # float, double or ap_fixed<a,b>
+        if sepconv_fusion_layers is not None:
+            if not isinstance(sepconv_fusion_layers, (list, tuple)) or not all(
+                isinstance(name, str) for name in sepconv_fusion_layers
+            ):
+                raise TypeError('sepconv_fusion_layers must be an explicit list of HLS layer names')
+            config['VitisUnifiedConfig']['SepConvFusion'] = {
+                'Enabled': True,
+                'Layers': list(sepconv_fusion_layers),
+            }
+        else:
+            config['VitisUnifiedConfig']['SepConvFusion'] = {
+                'Enabled': False,
+                'Layers': [],
+            }
 
         if io_type != 'io_stream':
             raise Exception('io_type must be io_stream')
@@ -172,12 +187,29 @@ class VitisUnifiedBackend(VitisBackend):
         return self._writer_flow
 
     def _register_flows(self):
-        vitis_ip = 'vitis:ip'
+        fusion_flow = register_flow(
+            'sepconv_fusion',
+            ['vitisunified:fuse_padded_depthwise_pointwise_2d'],
+            requires=['vivado:specific_types'],
+            backend=self.name,
+        )
+        template_flow = register_flow(
+            'apply_templates',
+            self._get_layer_templates,
+            requires=[fusion_flow],
+            backend=self.name,
+        )
+
+        ip_requirements = get_flow('vitis:ip').requires.copy()
+        specific_types_index = ip_requirements.index('vivado:specific_types')
+        ip_requirements.insert(specific_types_index + 1, fusion_flow)
+        ip_requirements.insert(specific_types_index + 2, template_flow)
+        self._default_flow = register_flow('ip', None, requires=ip_requirements, backend=self.name)
+
         writer_passes = ['make_stamp', 'vitisunified:write_hls']
-        self._writer_flow = register_flow('write', writer_passes, requires=['vitis:ip'], backend=self.name)
-        self._default_flow = vitis_ip
+        self._writer_flow = register_flow('write', writer_passes, requires=[self._default_flow], backend=self.name)
 
         # register fifo depth optimization
         fifo_depth_opt_passes = ['vitisunified:fifo_depth_optimization'] + writer_passes
 
-        register_flow('fifo_depth_optimization', fifo_depth_opt_passes, requires=['vitis:ip'], backend=self.name)
+        register_flow('fifo_depth_optimization', fifo_depth_opt_passes, requires=[self._default_flow], backend=self.name)
