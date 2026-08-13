@@ -54,7 +54,7 @@ def _vitis_unified_convert_kwargs(io_type, axi_mode, board='zcu102', **extra):
         'io_type': io_type,
         'board': board,
         'part': part,
-        'clock_period': '10ns',
+        'clock_period': 10,
         'input_type': 'float',
         'output_type': 'float',
         'axi_mode': axi_mode,
@@ -91,7 +91,7 @@ def test_backend_predict(test_case_id, simple_unet, io_type, strategy, granulari
         backend='Vitis',
         io_type=io_type,
         part='xczu9eg-ffvb1156-2-e',
-        clock_period='10ns',
+        clock_period=10,
     )
     vitis_model.compile()
 
@@ -99,6 +99,26 @@ def test_backend_predict(test_case_id, simple_unet, io_type, strategy, granulari
     hls_vitis_prediction = vitis_model.predict(X_input)
 
     np.testing.assert_array_equal(hls_unified_prediction, hls_vitis_prediction)
+
+
+@pytest.mark.parametrize('axi_mode', ['axi_stream', 'axi_master'])
+def test_clock_period_config(simple_unet, tmp_path, axi_mode):
+    config = hls4ml.utils.config_from_keras_model(simple_unet, granularity='name')
+    output_dir = tmp_path / axi_mode
+    hls_model = hls4ml.converters.convert_from_keras_model(
+        simple_unet,
+        hls_config=config,
+        output_dir=str(output_dir),
+        **_vitis_unified_convert_kwargs('io_stream', axi_mode, clock_period=8, project_name='clock_test'),
+    )
+    hls_model.write()
+
+    hls_config = (output_dir / 'hls_kernel_config_csim.cfg').read_text()
+    link_config = (output_dir / 'vitis_workspace/system_link/link_system.cfg').read_text()
+    kernel_name = f'clock_test_{axi_mode}'
+
+    assert 'clock=8ns' in hls_config
+    assert f'freqHz=125000000:{kernel_name}_1.ap_clk' in link_config
 
 
 @pytest.mark.parametrize('io_type', ['io_stream'])
