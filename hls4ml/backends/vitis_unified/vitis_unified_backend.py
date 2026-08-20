@@ -181,3 +181,13 @@ class VitisUnifiedBackend(VitisBackend):
         fifo_depth_opt_passes = ['vitisunified:fifo_depth_optimization'] + writer_passes
 
         register_flow('fifo_depth_optimization', fifo_depth_opt_passes, requires=['vitis:ip'], backend=self.name)
+
+        # register the static-analysis alternative (FIFO-Advisor + LightningSim)
+        fifo_depth_opt_advisor_passes = ['vitisunified:fifo_depth_optimization_advisor'] + writer_passes
+
+        register_flow(
+            'fifo_depth_optimization_advisor',
+            fifo_depth_opt_advisor_passes,
+            requires=['vitis:ip'],
+            backend=self.name,
+        )
